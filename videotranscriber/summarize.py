@@ -6,6 +6,7 @@ All chunk notes plus the full transcript are then combined into one summary
 ("reduce").
 """
 import base64
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -41,6 +42,34 @@ Write the final summary in Markdown with these sections:
 4. **Key points, decisions and numbers**
 5. **Action items / open questions** - only if there are any; otherwise omit the section.
 Be complete: the reader will rely on this instead of watching the {duration} video.{focus}
+
+<notes>
+{notes}
+</notes>
+
+<transcript>
+{transcript}
+</transcript>"""
+
+TASK_NOTES_HINT = """
+
+These notes will later be used for this task: "{task}". Capture everything that task needs in full, \
+copying exact wording from the speech and the screen where it matters (e.g. exercise instructions, \
+questions, data, code, formulas, requirements)."""
+
+TASK_PROMPT = """Below are detailed notes for each part of the video "{title}" (total length {duration}), \
+written from the transcript and the screenshots, followed by the full transcript.
+
+Use them to do the following task:
+
+<task>
+{task}
+</task>
+
+If the task refers to something in the video (an exercise, assignment, question, template, etc.), find it in \
+the notes and transcript and follow the video's instructions exactly, citing the timestamp where it appears. \
+If the video leaves something needed for the task unspecified, make a reasonable assumption and state it. \
+Respond in Markdown.{focus}
 
 <notes>
 {notes}
@@ -121,11 +150,16 @@ def _ask(client: anthropic.Anthropic, model: str, effort: str, system: str, cont
 
 
 def summarize(segments: list[dict], frames: list[dict], duration: float, workdir: Path, *, title: str,
-              model: str, effort: str, chunk_minutes: float, focus: str | None, workers: int) -> Path:
+              model: str, effort: str, chunk_minutes: float, focus: str | None, task: str | None,
+              workers: int) -> Path:
     client = anthropic.Anthropic()
     focus_text = f"\n\nThe reader is especially interested in: {focus}" if focus else ""
+    notes_hint = focus_text + (TASK_NOTES_HINT.format(task=task) if task else "")
     chunks = build_chunks(segments, frames, duration, chunk_minutes)
-    notes_dir = workdir / "notes"
+
+    # Notes depend on the focus/task they were written for, so each combination gets its own folder.
+    key = hashlib.sha1(f"{focus}\0{task}\0{chunk_minutes}".encode()).hexdigest()[:8] if (focus or task) else None
+    notes_dir = workdir / (f"notes-{key}" if key else "notes")
     notes_dir.mkdir(exist_ok=True)
 
     def notes_for(i: int) -> str:
@@ -134,7 +168,7 @@ def summarize(segments: list[dict], frames: list[dict], duration: float, workdir
             return path.read_text(encoding="utf-8")
         c = chunks[i]
         prompt = NOTES_PROMPT.format(part=i + 1, total=len(chunks), title=title,
-                                     start=fmt_ts(c["start"]), end=fmt_ts(c["end"]), focus=focus_text)
+                                     start=fmt_ts(c["start"]), end=fmt_ts(c["end"]), focus=notes_hint)
         content = [{"type": "text", "text": prompt}, *chunk_content(c, workdir)]
         print(f"[claude] Part {i + 1}/{len(chunks)} ({fmt_ts(c['start'])}-{fmt_ts(c['end'])}, "
               f"{len(c['segments'])} transcript lines, {len(c['frames'])} screenshots) ...")
@@ -145,16 +179,22 @@ def summarize(segments: list[dict], frames: list[dict], duration: float, workdir
     with ThreadPoolExecutor(max_workers=workers) as pool:
         all_notes = list(pool.map(notes_for, range(len(chunks))))
 
-    print("[claude] Writing final summary ...")
+    print("[claude] Doing the task ..." if task else "[claude] Writing final summary ...")
     notes = "\n\n".join(
         f"## Part {i + 1} ({fmt_ts(c['start'])} - {fmt_ts(c['end'])})\n\n{n}"
         for i, (c, n) in enumerate(zip(chunks, all_notes))
     )
     transcript = "\n".join(f"[{fmt_ts(s['start'])}] {s['text']}" for s in segments)
-    prompt = SUMMARY_PROMPT.format(title=title, duration=fmt_ts(duration), focus=focus_text,
-                                   notes=notes, transcript=transcript)
-    summary = _ask(client, model, effort, NOTES_SYSTEM, [{"type": "text", "text": prompt}])
+    template = TASK_PROMPT if task else SUMMARY_PROMPT
+    prompt = template.format(title=title, duration=fmt_ts(duration), focus=focus_text, task=task,
+                             notes=notes, transcript=transcript)
+    result = _ask(client, model, effort, NOTES_SYSTEM, [{"type": "text", "text": prompt}])
 
-    out = workdir / "summary.md"
-    out.write_text(f"# {title}\n\n{summary}\n", encoding="utf-8")
+    if task:
+        out = workdir / f"result-{key}.md"
+        quoted = "\n".join(f"> {line}" for line in task.splitlines())
+        out.write_text(f"# {title}\n\n**Task:**\n\n{quoted}\n\n---\n\n{result}\n", encoding="utf-8")
+    else:
+        out = workdir / ("summary.md" if not key else f"summary-{key}.md")
+        out.write_text(f"# {title}\n\n{result}\n", encoding="utf-8")
     return out

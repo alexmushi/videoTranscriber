@@ -19,6 +19,10 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("-o", "--out", type=Path, help="Output folder (default: output/<video id>)")
     p.add_argument("--title", help="Title used in the prompts and summary (default: file name)")
     p.add_argument("--focus", help="Optional extra instructions, e.g. 'pricing decisions and action items'")
+    task = p.add_mutually_exclusive_group()
+    task.add_argument("--task", help="Ask Claude to do something other than summarize, e.g. "
+                                     "'Do the exercise the video assigns and show your work'")
+    task.add_argument("--task-file", type=Path, help="Read the --task instructions from a text file")
 
     g = p.add_argument_group("transcription")
     g.add_argument("--whisper-model", default="small",
@@ -46,6 +50,9 @@ def main(argv: list[str] | None = None) -> None:
     g.add_argument("--no-summary", action="store_true",
                    help="Only download, transcribe and capture screenshots; skip Claude")
     args = p.parse_args(argv)
+
+    if args.task_file:
+        args.task = args.task_file.read_text(encoding="utf-8").strip()
 
     require_ffmpeg()
 
@@ -81,8 +88,8 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     out = summarize(segments, frames, duration, workdir, title=title, model=args.model, effort=args.effort,
-                    chunk_minutes=args.chunk_minutes, focus=args.focus, workers=args.workers)
-    print(f"\nDone. Summary: {out}")
+                    chunk_minutes=args.chunk_minutes, focus=args.focus, task=args.task, workers=args.workers)
+    print(f"\nDone. {'Result' if args.task else 'Summary'}: {out}")
 
 
 if __name__ == "__main__":

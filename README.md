@@ -48,13 +48,34 @@ Everything goes into `output/<file id>/`:
 | `transcript.txt` / `transcript.json` | Timestamped transcript |
 | `frames/` | The screenshots that were sent to Claude |
 
-Each step saves its results, so if you run the command again it skips what's already done. For example, delete
-`summary.md` and `notes/` to regenerate only the summary with different `--focus` instructions.
+Each step saves its results, so if you run the command again it skips what's already done. The download, transcript
+and screenshots are reused, so trying a different `--focus` or `--task` only re-runs the Claude part.
+
+### Asking for something other than a summary
+
+Use `--task` to tell Claude what to do with the video instead of summarizing it:
+
+```bash
+videotranscriber "https://drive.google.com/file/d/FILE_ID/view" \
+  --task "Do the exercise the instructor assigns at the end of the video. Show your work step by step."
+
+# Longer instructions can go in a text file:
+videotranscriber "https://drive.google.com/file/d/FILE_ID/view" --task-file my_task.txt
+```
+
+Other ideas: "Write a study guide with practice questions", "List every command shown on screen, in order",
+"Turn this into meeting minutes", "Write the code the presenter builds in the demo".
+
+With a task, Claude still writes notes for each part first, but is told what the task is so it copies the details
+the task needs (exact exercise wording, data, code shown on screen). Then it does the task using those notes and the
+full transcript. The answer is saved as `result-<id>.md` (the id changes per task, so earlier results aren't
+overwritten), starting with the task you gave.
 
 ### Useful options
 
 | Option | Default | What it does |
 |---|---|---|
+| `--task "..."` / `--task-file` | | Do this instead of the default summary (see above) |
 | `--focus "..."` | | Tell Claude what you care about, e.g. `--focus "technical decisions and who owns each follow-up"` |
 | `--whisper-model` | `small` | `medium` or `large-v3` are more accurate but slower. Use `large-v3` with a GPU |
 | `--language` | auto | Spoken language, e.g. `en`, `es` |
